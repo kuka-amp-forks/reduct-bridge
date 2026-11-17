@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc::{Sender, channel};
 
 mod instance;
+mod session;
 mod topic_runtime;
 mod wildcard;
 

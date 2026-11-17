@@ -1,3 +1,4 @@
+use super::session::{Session, Subscription};
 use super::topic_runtime::Ros2TopicRuntime;
 use super::wildcard;
 use crate::formats::json::{extract_json_path, value_to_label};
@@ -8,14 +9,9 @@ use crate::timestamp::{
 };
 use anyhow::{Error, anyhow, bail};
 use log::{info, warn};
-use rclrs::{
-    Context as Ros2Context, CreateBasicExecutor, InitOptions, MessageInfo, MessageTypeName,
-    QoSProfile, SpinOptions, SubscriptionOptions,
-};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -28,6 +24,10 @@ const TOPIC_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(10);
 const TOPIC_DISCOVERY_RETRY_INTERVAL: Duration = Duration::from_millis(200);
 /// How often a topic that is not yet published is looked for again.
 const PENDING_TOPIC_RETRY_INTERVAL: Duration = Duration::from_secs(1);
+/// How long the worker sleeps when no subscription had anything. Messages wait
+/// in each subscription's queue (its QoS depth) meanwhile, and keep the
+/// publisher's timestamp, so this only delays the write.
+const DRAIN_INTERVAL: Duration = Duration::from_millis(10);
 
 fn default_queue_size() -> usize {
     DEFAULT_QUEUE_SIZE
@@ -87,20 +87,6 @@ pub enum Ros2Durability {
     TransientLocal,
 }
 
-impl Ros2QosConfig {
-    pub(super) fn profile(&self, queue_size: u32) -> QoSProfile {
-        let mut qos = QoSProfile::default().keep_last(self.depth.unwrap_or(queue_size));
-        qos = match self.reliability {
-            Some(Ros2Reliability::BestEffort) => qos.best_effort(),
-            Some(Ros2Reliability::Reliable) | None => qos.reliable(),
-        };
-        match self.durability {
-            Some(Ros2Durability::TransientLocal) => qos.transient_local(),
-            Some(Ros2Durability::Volatile) | None => qos.volatile(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum Ros2LabelRule {
@@ -148,38 +134,6 @@ impl Ros2Instance {
         "application/cdr"
     }
 
-    pub(super) fn ensure_ros_logging_environment(node_name: &str) -> Result<(), Error> {
-        if std::env::var_os("ROS_LOG_DIR").is_some() {
-            return Ok(());
-        }
-
-        if std::env::var_os("HOME").is_some() || std::env::var_os("ROS_HOME").is_some() {
-            return Ok(());
-        }
-
-        let ros_home = std::env::temp_dir().join("reduct-bridge").join("ros");
-        let ros_log_dir = ros_home.join("log");
-        fs::create_dir_all(&ros_log_dir).map_err(|err| {
-            anyhow!(
-                "Failed to create fallback ROS2 log directory '{}' for node '{}': {}",
-                ros_log_dir.display(),
-                node_name,
-                err
-            )
-        })?;
-
-        unsafe {
-            std::env::set_var("ROS_HOME", &ros_home);
-            std::env::set_var("ROS_LOG_DIR", &ros_log_dir);
-        }
-        info!(
-            "ROS2 logging environment was unset; using fallback ROS_HOME='{}' ROS_LOG_DIR='{}'",
-            ros_home.display(),
-            ros_log_dir.display()
-        );
-        Ok(())
-    }
-
     pub(super) fn has_dynamic_labels(rules: &[Ros2LabelRule]) -> bool {
         rules
             .iter()
@@ -212,13 +166,6 @@ impl Ros2Instance {
     ) -> TimeResolutionResult {
         let field = timestamp.field.as_deref().unwrap_or("header.stamp");
         resolve_from_json(message, field, &timestamp.format)
-    }
-
-    pub(super) fn create_context(cfg: &Ros2Config) -> Result<Ros2Context, Error> {
-        Self::ensure_ros_logging_environment(&cfg.node_name)?;
-        let init = InitOptions::new().with_domain_id(cfg.domain_id);
-        Ros2Context::new(std::env::args(), init)
-            .map_err(|err| anyhow!("Failed to initialize ROS2 context: {}", err))
     }
 
     pub(super) fn select_topic_type(
@@ -445,21 +392,18 @@ impl Ros2Instance {
         resolve_from_json(message, "header.stamp", &TimestampFormat::RosStamp)
     }
 
-    pub(super) fn message_info_timestamp_us(info: &MessageInfo) -> u64 {
-        info.source_timestamp
-            .or(info.received_timestamp)
-            .and_then(|ts| ts.duration_since(UNIX_EPOCH).ok())
-            .map(|ts| ts.as_micros() as u64)
-            .unwrap_or_else(|| {
-                SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_micros() as u64
-            })
+    /// The publisher's timestamp, else the time it arrived.
+    pub(super) fn message_timestamp_us(source_timestamp_us: Option<u64>) -> u64 {
+        source_timestamp_us.unwrap_or_else(|| {
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_micros() as u64
+        })
     }
 
     pub(super) fn wait_for_resolved_topics(
-        node: &rclrs::Node,
+        node: &Session,
         configured_topics: &[Ros2TopicConfig],
     ) -> Result<Vec<Ros2TopicConfig>, Error> {
         let wildcard_patterns = configured_topics
@@ -529,15 +473,13 @@ impl Ros2Instance {
     /// the rest in `pending`. A topic that fails to subscribe is dropped: it
     /// is advertised, so retrying would fail the same way.
     fn subscribe_advertised(
-        node: &rclrs::Node,
+        node: &Session,
         pending: &mut Vec<Ros2TopicConfig>,
-        subscriptions: &mut Vec<rclrs::SerializedSubscription>,
+        subscriptions: &mut Vec<(Subscription, Ros2TopicRuntime)>,
         worker_cfg: &Ros2Config,
         pipeline_tx: &Sender<Message>,
     ) {
-        let Ok(topic_types) = wildcard::topic_types_by_name(node) else {
-            return;
-        };
+        let topic_types = wildcard::topic_types_by_name(node);
         pending.retain(|topic_cfg| {
             let Ok(topic_type) = Self::select_topic_type(&topic_cfg.name, &topic_types) else {
                 return true;
@@ -555,37 +497,35 @@ impl Ros2Instance {
     /// skips that topic only, rather than stopping every other topic's
     /// recording with it.
     fn subscribe_topic(
-        node: &rclrs::Node,
+        node: &Session,
         topic_cfg: &Ros2TopicConfig,
         topic_type: &str,
         worker_cfg: &Ros2Config,
         pipeline_tx: &Sender<Message>,
-    ) -> Option<rclrs::SerializedSubscription> {
-        let result = (|| -> Result<rclrs::SerializedSubscription, Error> {
-            let (topic_type, runtime) = Self::prepare_topic_runtime(
+    ) -> Option<(Subscription, Ros2TopicRuntime)> {
+        let result = (|| -> Result<(Subscription, Ros2TopicRuntime), Error> {
+            let subscription = node
+                .subscribe(
+                    &topic_cfg.name,
+                    topic_type,
+                    &topic_cfg.qos,
+                    worker_cfg.queue_size as u32,
+                )
+                .map_err(|err| {
+                    anyhow!(
+                        "Failed to subscribe to ROS2 topic '{}' [{}]: {:#}",
+                        topic_cfg.name,
+                        topic_type,
+                        err
+                    )
+                })?;
+            let (_, runtime) = Self::prepare_topic_runtime(
                 topic_cfg,
                 topic_type,
                 &worker_cfg.schema_paths,
                 pipeline_tx,
             )?;
-            let callback = move |payload: Vec<u8>, info: MessageInfo| {
-                runtime.handle_payload(payload, Self::message_info_timestamp_us(&info));
-            };
-            let mut options = SubscriptionOptions::new(topic_cfg.name.as_str());
-            options.qos = topic_cfg.qos.profile(worker_cfg.queue_size as u32);
-            node.create_serialized_subscription(
-                MessageTypeName::try_from(topic_type.as_str())?,
-                options,
-                callback,
-            )
-            .map_err(|err| {
-                anyhow!(
-                    "Failed to subscribe to ROS2 topic '{}' [{}]: {}",
-                    topic_cfg.name,
-                    topic_type,
-                    err
-                )
-            })
+            Ok((subscription, runtime))
         })();
         match result {
             Ok(subscription) => {
@@ -644,15 +584,7 @@ impl Ros2Instance {
             .name(format!("ros2-{}", cfg.node_name))
             .spawn(move || {
                 let startup = || -> Result<(), Error> {
-                    let context = Self::create_context(&worker_cfg)?;
-                    let mut executor = context.create_basic_executor();
-                    let node = executor.create_node(worker_cfg.node_name.as_str()).map_err(|err| {
-                        anyhow!(
-                            "Failed to create ROS2 node '{}': {}",
-                            worker_cfg.node_name,
-                            err
-                        )
-                    })?;
+                    let node = Session::new(&worker_cfg)?;
 
                     info!(
                         "Launching ROS2 input '{}' in domain {:?}",
@@ -698,12 +630,17 @@ impl Ros2Instance {
                                 }
                             }
                         }
-                        let errors =
-                            executor.spin(SpinOptions::spin_once().timeout(Duration::from_millis(200)));
-                        for err in errors {
-                            if !err.is_timeout() {
-                                warn!("ROS2 executor error in '{}': {}", worker_cfg.node_name, err);
-                            }
+                        let mut received = 0;
+                        for (subscription, runtime) in &subscriptions {
+                            received += subscription.drain(|payload, source_timestamp_us| {
+                                runtime.handle_payload(
+                                    payload,
+                                    Self::message_timestamp_us(source_timestamp_us),
+                                );
+                            });
+                        }
+                        if received == 0 {
+                            std::thread::sleep(DRAIN_INTERVAL);
                         }
                     }
 
@@ -857,10 +794,6 @@ mod tests {
     fn qos_defaults_to_reliable_volatile_at_the_queue_depth() {
         let topic: Ros2TopicConfig = toml::from_str("name = \"/tf\"").unwrap();
         assert_eq!(topic.qos, Ros2QosConfig::default());
-        let qos = topic.qos.profile(7);
-        assert_eq!(qos.history, rclrs::QoSHistoryPolicy::KeepLast { depth: 7 });
-        assert_eq!(qos.reliability, rclrs::QoSReliabilityPolicy::Reliable);
-        assert_eq!(qos.durability, rclrs::QoSDurabilityPolicy::Volatile);
     }
 
     #[test]
@@ -869,10 +802,14 @@ mod tests {
             "name = \"/map\"\nqos = { reliability = \"best_effort\", durability = \"transient_local\", depth = 1 }",
         )
         .unwrap();
-        let qos = topic.qos.profile(128);
-        assert_eq!(qos.history, rclrs::QoSHistoryPolicy::KeepLast { depth: 1 });
-        assert_eq!(qos.reliability, rclrs::QoSReliabilityPolicy::BestEffort);
-        assert_eq!(qos.durability, rclrs::QoSDurabilityPolicy::TransientLocal);
+        assert_eq!(
+            topic.qos,
+            Ros2QosConfig {
+                reliability: Some(super::Ros2Reliability::BestEffort),
+                durability: Some(super::Ros2Durability::TransientLocal),
+                depth: Some(1),
+            }
+        );
     }
 
     #[test]

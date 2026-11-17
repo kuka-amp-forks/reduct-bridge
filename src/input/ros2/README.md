@@ -87,14 +87,31 @@ stays unmatched, which is why this reads as "the topic records nothing".
 
 ## Build
 
-ROS2 input requires a local ROS2 installation and a sourced ROS2 environment before building:
+The ROS2 input speaks ROS 2 over Zenoh, as `rmw_zenoh` does, through
+[hiroz](https://github.com/ZettaScaleLabs/hiroz). It needs no ROS installation
+to build or run:
 
 ```bash
-source /opt/ros/jazzy/setup.bash
 cargo build --no-default-features --features ros2
 ```
 
-The ROS2 installation must include the standard interface packages that `rclrs` links against. In CI we install `ros-jazzy-example-interfaces` and `ros-jazzy-test-msgs` explicitly.
+It records what `rmw_zenoh_cpp` publishers send. Publishers on a DDS RMW are
+not visible to it.
+
+## Connecting
+
+The input connects as `rmw_zenoh_cpp`'s sessions do: as a client of the Zenoh
+router at `tcp/localhost:7447`, or with the session config named by
+`ZENOH_SESSION_CONFIG_URI`, with `ZENOH_CONFIG_OVERRIDE`'s `key=value;...`
+pairs applied on top. For a router on another port:
+
+```bash
+ZENOH_CONFIG_OVERRIDE='connect/endpoints=["tcp/localhost:7457"]' reduct-bridge config.toml
+```
+
+At startup the input waits up to 5 s for the ROS graph to settle before it
+resolves wildcards, so a pattern matches every topic already published rather
+than the first ones discovered.
 
 ## Runtime Notes
 
@@ -108,10 +125,7 @@ The ROS2 installation must include the standard interface packages that `rclrs` 
 - `entry_name` cannot be empty when explicitly set.
 - `schema_paths` is optional. If set, those paths are used first.
 - If `schema_paths` is empty, schema lookup falls back to `AMENT_PREFIX_PATH`, `COLCON_PREFIX_PATH`, and `CMAKE_PREFIX_PATH`.
-- For service deployments, set `ROS_HOME` to a writable directory before starting `reduct-bridge`.
-- If you do not set `ROS_HOME`, you must set `HOME` or `ROS_LOG_DIR` instead so ROS2 can initialize its logging directory.
 - For Snap service deployments, if you set `schema_paths` explicitly, use the ROS path staged in the snap runtime: `"/opt/ros/jazzy"`.
-- ROS2 snaps default to `FASTDDS_BUILTIN_TRANSPORTS=UDPv4` to avoid Fast DDS shared-memory transport errors under strict confinement.
 - Example:
 
 ```bash

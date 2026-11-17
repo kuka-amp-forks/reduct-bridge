@@ -1,7 +1,7 @@
 use super::Ros2TopicConfig;
-use anyhow::{Error, anyhow};
+use super::session::Session;
+use anyhow::Error;
 use log::{info, warn};
-use rclrs::Node;
 use std::collections::{HashMap, HashSet};
 
 pub(super) fn wildcard_match(pattern: &str, value: &str) -> bool {
@@ -82,7 +82,7 @@ pub(super) fn resolve_topic_patterns(
 }
 
 pub(super) fn resolve_topics_for_subscription(
-    node: &Node,
+    node: &Session,
     configured_topics: &[Ros2TopicConfig],
 ) -> Result<Vec<Ros2TopicConfig>, Error> {
     let available_topics = available_topic_names(node)?;
@@ -110,22 +110,12 @@ pub(super) fn resolve_topics_for_subscription(
     Ok(resolve_topic_patterns(configured_topics, &available_topics))
 }
 
-pub(super) fn available_topic_names(node: &Node) -> Result<Vec<String>, Error> {
-    Ok(node
-        .get_topic_names_and_types()
-        .map_err(|err| {
-            anyhow!(
-                "Failed to fetch ROS2 topics for wildcard resolution: {}",
-                err
-            )
-        })?
-        .into_keys()
-        .collect::<Vec<_>>())
+pub(super) fn available_topic_names(node: &Session) -> Result<Vec<String>, Error> {
+    Ok(node.topic_names_and_types().into_keys().collect::<Vec<_>>())
 }
 
-pub(super) fn topic_types_by_name(node: &Node) -> Result<HashMap<String, Vec<String>>, Error> {
-    node.get_topic_names_and_types()
-        .map_err(|err| anyhow!("Failed to fetch ROS2 topic types: {}", err))
+pub(super) fn topic_types_by_name(node: &Session) -> HashMap<String, Vec<String>> {
+    node.topic_names_and_types()
 }
 
 #[cfg(test)]
