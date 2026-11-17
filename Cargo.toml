@@ -5,6 +5,14 @@ edition = "2024"
 rust-version = "1.96"
 
 
+[lib]
+name = "reduct_bridge"
+path = "src/lib.rs"
+
+[[bin]]
+name = "reduct-bridge"
+path = "src/main.rs"
+
 [features]
 default = ["shell"]
 all-inputs = ["shell", "ros1", "ros2", "metrics", "http", "iot"]
