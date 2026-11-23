@@ -52,7 +52,7 @@ url = "2.5.7"
 rosrust = { version = "0.9.13", optional = true, git = "https://github.com/reductstore/rosrust.git", tag = "v0.9.13" }
 # ROS 2 over Zenoh, as rmw_zenoh speaks it: no rcl or ROS install to build
 # or run against. kuka-amp-forks/hiroz, at the rev amp_robot's nav bridge uses.
-hiroz = { git = "https://github.com/kuka-amp-forks/hiroz", rev = "6a02b3a748fd29369b522e8f18b9db39f736f5d4", optional = true, default-features = false, features = ["rmw-zenoh", "lyrical"] }
+hiroz = { git = "https://github.com/kuka-amp-forks/hiroz", rev = "7087d197a37142145b1b1ed0906ccf2ba029f9a9", optional = true, default-features = false, features = ["rmw-zenoh", "lyrical"] }
 zenoh = { version = "1", optional = true }
 ros2_message = { git = "https://github.com/reductstore/ros2_message", optional = true, version = "0.1.1" }
 systemstat = { version = "0.2.6", optional = true }
