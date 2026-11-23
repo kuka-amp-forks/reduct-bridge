@@ -1486,7 +1486,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 [[package]]
 name = "hiroz"
 version = "0.2.0"
-source = "git+https://github.com/kuka-amp-forks/hiroz?rev=6a02b3a748fd29369b522e8f18b9db39f736f5d4#6a02b3a748fd29369b522e8f18b9db39f736f5d4"
+source = "git+https://github.com/kuka-amp-forks/hiroz?rev=7087d197a37142145b1b1ed0906ccf2ba029f9a9#7087d197a37142145b1b1ed0906ccf2ba029f9a9"
 dependencies = [
  "byteorder",
  "clap",
@@ -1520,7 +1520,7 @@ dependencies = [
 [[package]]
 name = "hiroz-cdr"
 version = "0.2.0"
-source = "git+https://github.com/kuka-amp-forks/hiroz?rev=6a02b3a748fd29369b522e8f18b9db39f736f5d4#6a02b3a748fd29369b522e8f18b9db39f736f5d4"
+source = "git+https://github.com/kuka-amp-forks/hiroz?rev=7087d197a37142145b1b1ed0906ccf2ba029f9a9#7087d197a37142145b1b1ed0906ccf2ba029f9a9"
 dependencies = [
  "bytemuck",
  "byteorder",
@@ -1532,7 +1532,7 @@ dependencies = [
 [[package]]
 name = "hiroz-derive"
 version = "0.2.0"
-source = "git+https://github.com/kuka-amp-forks/hiroz?rev=6a02b3a748fd29369b522e8f18b9db39f736f5d4#6a02b3a748fd29369b522e8f18b9db39f736f5d4"
+source = "git+https://github.com/kuka-amp-forks/hiroz?rev=7087d197a37142145b1b1ed0906ccf2ba029f9a9#7087d197a37142145b1b1ed0906ccf2ba029f9a9"
 dependencies = [
  "hiroz-schema",
  "proc-macro2",
@@ -1543,7 +1543,7 @@ dependencies = [
 [[package]]
 name = "hiroz-protocol"
 version = "0.2.0"
-source = "git+https://github.com/kuka-amp-forks/hiroz?rev=6a02b3a748fd29369b522e8f18b9db39f736f5d4#6a02b3a748fd29369b522e8f18b9db39f736f5d4"
+source = "git+https://github.com/kuka-amp-forks/hiroz?rev=7087d197a37142145b1b1ed0906ccf2ba029f9a9#7087d197a37142145b1b1ed0906ccf2ba029f9a9"
 dependencies = [
  "hiroz-schema",
  "zenoh",
@@ -1552,7 +1552,7 @@ dependencies = [
 [[package]]
 name = "hiroz-schema"
 version = "0.2.0"
-source = "git+https://github.com/kuka-amp-forks/hiroz?rev=6a02b3a748fd29369b522e8f18b9db39f736f5d4#6a02b3a748fd29369b522e8f18b9db39f736f5d4"
+source = "git+https://github.com/kuka-amp-forks/hiroz?rev=7087d197a37142145b1b1ed0906ccf2ba029f9a9#7087d197a37142145b1b1ed0906ccf2ba029f9a9"
 dependencies = [
  "hex",
  "serde",
